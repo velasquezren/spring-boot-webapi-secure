@@ -1,0 +1,256 @@
+# Workflow reutilizable: build + SAST (Semgrep, SpotBugs, CodeQL) + SCA
+# (OWASP Dependency-Check, SBOM) + Quality Gate que lee los reportes.
+# Es invocado por ci.yml, ci-cd.yml y nightly-sca.yml.
+name: Security Pipeline (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      codeql:
+        description: Ejecutar CodeQL
+        type: boolean
+        default: false
+      sca:
+        description: Ejecutar SCA (OWASP Dependency-Check + SBOM CycloneDX)
+        type: boolean
+        default: false
+      gate-title:
+        type: string
+        default: Quality Gate de Seguridad
+    secrets:
+      NVD_API_KEY:
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  JAVA_VERSION: '21'
+  MAVEN_OPTS: '-Xmx2g'
+
+jobs:
+  # ------------------------------------------------------------------
+  # 1. Build + pruebas + cobertura
+  # ------------------------------------------------------------------
+  build-and-test:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: maven
+
+      - name: Build & test con cobertura (JaCoCo)
+        run: mvn -B clean verify
+
+      - name: Publicar reportes de pruebas
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: |
+            target/surefire-reports/
+            target/site/jacoco/
+          retention-days: 7
+
+  # ------------------------------------------------------------------
+  # 2. SAST - Semgrep (reglas auto + reglas propias .semgrep.yml)
+  # ------------------------------------------------------------------
+  sast-semgrep:
+    name: SAST - Semgrep
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Ejecutar Semgrep
+        # Sin --error: los hallazgos los evalua el Quality Gate.
+        run: |
+          semgrep scan \
+            --config auto \
+            --config .semgrep.yml \
+            --metrics=on \
+            --json-output=semgrep-results.json \
+            --sarif-output=semgrep-results.sarif \
+            src/main/java
+
+      - name: Publicar reportes de Semgrep
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-reports
+          path: |
+            semgrep-results.json
+            semgrep-results.sarif
+          if-no-files-found: error
+          retention-days: 14
+
+  # ------------------------------------------------------------------
+  # 3. SAST - SpotBugs + Find Security Bugs (bytecode)
+  # ------------------------------------------------------------------
+  sast-spotbugs:
+    name: SAST - SpotBugs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: maven
+
+      - name: Ejecutar SpotBugs + FindSecBugs
+        run: mvn -B -DskipTests compile com.github.spotbugs:spotbugs-maven-plugin:spotbugs
+
+      - name: Publicar reportes de SpotBugs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spotbugs-reports
+          path: |
+            target/spotbugsXml.xml
+            target/spotbugsSarif.json
+          if-no-files-found: error
+          retention-days: 14
+
+  # ------------------------------------------------------------------
+  # 4. SAST - CodeQL (opcional)
+  # ------------------------------------------------------------------
+  sast-codeql:
+    name: SAST - CodeQL
+    if: inputs.codeql
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: maven
+
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: java-kotlin
+          build-mode: manual
+          queries: security-and-quality
+
+      - name: Compilar para CodeQL
+        run: mvn -B -DskipTests clean compile
+
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:java
+          output: codeql-results
+
+      - name: Publicar SARIF de CodeQL
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codeql-reports
+          path: codeql-results/*.sarif
+          retention-days: 14
+
+  # ------------------------------------------------------------------
+  # 5. SCA - OWASP Dependency-Check + SBOM CycloneDX (opcional)
+  # ------------------------------------------------------------------
+  sca-dependency-check:
+    name: SCA - OWASP Dependency-Check
+    if: inputs.sca
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-java@v5
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          cache: maven
+
+      - name: Cache base de datos NVD
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository/org/owasp/dependency-check-data
+          key: nvd-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: nvd-${{ runner.os }}-
+
+      - name: Ejecutar OWASP Dependency-Check
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+        # failBuildOnCVSS=11 -> la herramienta nunca falla por hallazgos;
+        # la decision la toma el Quality Gate leyendo el reporte JSON.
+        run: mvn -B org.owasp:dependency-check-maven:check -DfailBuildOnCVSS=11
+
+      - name: Generar SBOM CycloneDX
+        run: mvn -B org.cyclonedx:cyclonedx-maven-plugin:makeAggregateBom
+
+      - name: Publicar reportes SCA
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-check-reports
+          path: |
+            target/dependency-check-report.html
+            target/dependency-check-report.json
+            target/dependency-check-report.sarif
+            target/bom.json
+          if-no-files-found: error
+          retention-days: 14
+
+  # ------------------------------------------------------------------
+  # 6. Quality Gate: lee los reportes y falla ante hallazgos criticos
+  # ------------------------------------------------------------------
+  quality-gate:
+    name: Quality Gate
+    runs-on: ubuntu-latest
+    needs: [build-and-test, sast-semgrep, sast-spotbugs, sast-codeql, sca-dependency-check]
+    if: always()
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Descargar reportes
+        uses: actions/download-artifact@v4
+        with:
+          path: reports
+
+      - name: Evaluar reportes
+        env:
+          QG_MAX_CRITICAL: '0'
+          QG_SPOTBUGS_MAX_RANK: '12'
+          QG_FAIL_ON_HIGH: 'false'
+          QG_JOB_RESULTS: >-
+            build-and-test=${{ needs.build-and-test.result }},
+            sast-semgrep=${{ needs.sast-semgrep.result }},
+            sast-spotbugs=${{ needs.sast-spotbugs.result }},
+            sast-codeql=${{ needs.sast-codeql.result }},
+            sca-dependency-check=${{ needs.sca-dependency-check.result }}
+        run: |
+          args=(--title "${{ inputs.gate-title }}"
+                --semgrep reports/semgrep-reports/semgrep-results.json
+                --spotbugs reports/spotbugs-reports/spotbugsXml.xml)
+          if [[ "${{ inputs.codeql }}" == "true" ]]; then
+            for f in reports/codeql-reports/*.sarif; do args+=(--sarif "$f"); done
+          fi
+          if [[ "${{ inputs.sca }}" == "true" ]]; then
+            args+=(--dependency-check reports/dependency-check-reports/dependency-check-report.json)
+          fi
+          python3 .github/scripts/quality_gate.py "${args[@]}"
+
+      - name: Publicar resultado del Quality Gate
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-gate-report
+          path: quality-gate-report.md
+          retention-days: 14

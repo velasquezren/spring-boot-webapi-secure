@@ -1,5 +1,7 @@
-target/classes
-target/test-classes
+target
 .git
+.github
 .idea
 *.iml
+reports
+docs

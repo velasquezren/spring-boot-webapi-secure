@@ -1,0 +1,26 @@
+# Ejecucion nocturna completa: build + SAST (Semgrep, SpotBugs, CodeQL)
+# + SCA (OWASP Dependency-Check + SBOM CycloneDX) + Quality Gate.
+name: CI/CD - Nightly + SCA
+
+on:
+  schedule:
+    - cron: '0 6 * * *'   # 06:00 UTC = 02:00 America/La_Paz
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  nightly:
+    name: Nightly
+    uses: ./.github/workflows/security-pipeline.yml
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    with:
+      codeql: true
+      sca: true
+      gate-title: Quality Gate - Nightly + SCA
+    secrets:
+      NVD_API_KEY: ${{ secrets.NVD_API_KEY }}

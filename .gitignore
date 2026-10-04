@@ -3,3 +3,5 @@ target/
 *.iml
 .vscode/
 *.log
+reports/
+quality-gate-report.md

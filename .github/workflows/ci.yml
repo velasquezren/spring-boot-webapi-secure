@@ -1,0 +1,27 @@
+# CI para ramas de trabajo: build + SAST (Semgrep, SpotBugs) + Quality Gate.
+name: CI - Feature
+
+on:
+  push:
+    branches: [ 'feature/**', 'bugfix/**', 'hotfix/**' ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    name: CI
+    uses: ./.github/workflows/security-pipeline.yml
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    with:
+      codeql: false
+      sca: false
+      gate-title: Quality Gate - CI feature
