@@ -190,7 +190,7 @@ jobs:
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
         # failBuildOnCVSS=11 -> la herramienta nunca falla por hallazgos;
         # la decision la toma el Quality Gate leyendo el reporte JSON.
-        run: mvn -B org.owasp:dependency-check-maven:check -DfailBuildOnCVSS=11
+        run: mvn -B org.owasp:dependency-check-maven:check -Ddc.failBuildOnCVSS=11
 
       - name: Generar SBOM CycloneDX
         run: mvn -B org.cyclonedx:cyclonedx-maven-plugin:makeAggregateBom

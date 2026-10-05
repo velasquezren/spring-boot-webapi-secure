@@ -21,6 +21,8 @@
         <java.version>21</java.version>
         <!-- La API key de NVD se inyecta por variable de entorno (secreto NVD_API_KEY en GitHub). -->
         <nvd.api.key>${env.NVD_API_KEY}</nvd.api.key>
+        <!-- Umbral sobreescribible: en CI se usa 11 y la decision la toma el Quality Gate. -->
+        <dc.failBuildOnCVSS>7</dc.failBuildOnCVSS>
     </properties>
 
     <dependencies>
@@ -92,7 +94,7 @@
                 <artifactId>dependency-check-maven</artifactId>
                 <version>13.0.0</version>
                 <configuration>
-                    <failBuildOnCVSS>7</failBuildOnCVSS>
+                    <failBuildOnCVSS>${dc.failBuildOnCVSS}</failBuildOnCVSS>
                     <nvdApiKey>${nvd.api.key}</nvdApiKey>
                     <formats>
                         <format>HTML</format>
