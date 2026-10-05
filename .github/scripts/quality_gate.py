@@ -135,15 +135,17 @@ def main():
     sources = [(args.semgrep, parse_semgrep, "Semgrep"),
                (args.spotbugs, parse_spotbugs, "SpotBugs"),
                (args.dependency_check, parse_dependency_check, "Dependency-Check")]
-    sources += [(p, parse_sarif, f"SARIF {Path(p).name}") for p in args.sarif]
+    sources += [(p, parse_sarif, f"SARIF ({Path(p).name})") for p in args.sarif]
 
     findings, analyzed, missing = [], [], []
     for path, parser, name in sources:
         if not path:
             continue
         if Path(path).is_file():
-            findings += parser(path)
-            analyzed.append(name)
+            parsed = parser(path)
+            findings += parsed
+            if not parsed:  # sin hallazgos: listar igual la herramienta en el resumen
+                analyzed.append(name)
         else:
             missing.append(f"{name} ({path})")
 
